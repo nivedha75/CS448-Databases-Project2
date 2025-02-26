@@ -51,8 +51,8 @@ public class BufMgr implements GlobalConst {
      */
     public BufMgr(int numbufs, String replacerArg) {
         this.numBufs = numbufs;
+        SystemDefs.JavabaseBM = this;
         this.db = new DB();  // If your code uses a shared DB or an openDB(...), adapt accordingly.
-        //this.db = SystemDefs.JavabaseDB;
         try {
           db.openDB("MyTempDB", 2000);  // Make sure to open it
         } catch (Exception e) {
@@ -229,32 +229,35 @@ public class BufMgr implements GlobalConst {
      * Throw PagePinnedException if it’s still pinned.
      *
      * @param globalPageId the page ID to free
-     */
-    public void freePage(PageId globalPageId) throws PagePinnedException {
+          * @throws HashEntryNotFoundException 
+          */
+         public void freePage(PageId globalPageId) throws PagePinnedException, HashEntryNotFoundException {
         int frameIndex = hashLookup(globalPageId);
-        if (frameIndex != -1) {
-            FrameDesc fdesc = frameTable[frameIndex];
-            if (fdesc.pinCount > 0) {
-                throw new PagePinnedException(null,
+        if (frameIndex == -1) {
+          return;
+        }
+        FrameDesc fdesc = frameTable[frameIndex];
+        if (fdesc.pinCount > 0) {
+            throw new PagePinnedException(null,
                         "Cannot free a pinned page!");
-            }
+        }
             // Remove from hash table
             hashRemove(globalPageId);
 
             // Mark frame as empty
             fdesc.pageId = new PageId(INVALID_PAGE);
             fdesc.dirty = false;
+            fdesc.pinCount = 0;
 
             // The frame is now unused; put it on FIFO queue if it's not there already
             if (!fifoQueue.contains(frameIndex)) {
                 fifoQueue.addLast(frameIndex);
             }
-        }
         // Also remove it from disk
         try {
             db.deallocate_page(globalPageId);
         } catch (Exception e) {
-            // handle or ignore as needed
+            e.printStackTrace();
         }
     }
 
@@ -278,6 +281,9 @@ public class BufMgr implements GlobalConst {
             return;
         }
         FrameDesc fdesc = frameTable[frameIndex];
+        if (fdesc == null ||  fdesc.pageId.pid == INVALID_PAGE) {
+          return;
+        }
         if (fdesc.dirty) {
             // Write it to disk
             db.write_page(fdesc.pageId, bufPool[frameIndex]);
