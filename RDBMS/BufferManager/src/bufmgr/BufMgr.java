@@ -70,6 +70,7 @@ public class BufMgr implements GlobalConst {
             frameTable[i].pageId = new PageId(INVALID_PAGE);
             frameTable[i].pinCount = 0;
             frameTable[i].dirty = false;
+            frameTable[i].reference = false;
 
             // Initially all frames are unpinned => they're free for replacement
             fifoQueue.addLast(i);
@@ -181,8 +182,11 @@ public class BufMgr implements GlobalConst {
             fdesc.dirty = true;
         }
         if (fdesc.pinCount == 0) {
+            fdesc.reference = true;
             // Now it is a candidate for replacement
-            fifoQueue.addLast(frameIndex);
+            if (!fifoQueue.contains(frameIndex)) {
+                fifoQueue.addLast(frameIndex);
+            }
         }
     }
 
@@ -230,34 +234,42 @@ public class BufMgr implements GlobalConst {
      *
      * @param globalPageId the page ID to free
           * @throws HashEntryNotFoundException 
-          */
-         public void freePage(PageId globalPageId) throws PagePinnedException, HashEntryNotFoundException {
+               * @throws PageUnpinnedException 
+                    */
+                  public void freePage(PageId globalPageId) throws PagePinnedException, HashEntryNotFoundException, PageUnpinnedException {
         int frameIndex = hashLookup(globalPageId);
         if (frameIndex == -1) {
           return;
         }
         FrameDesc fdesc = frameTable[frameIndex];
         if (fdesc.pinCount > 0) {
-            throw new PagePinnedException(null,
-                        "Cannot free a pinned page!");
-        }
-            // Remove from hash table
-            hashRemove(globalPageId);
-
-            // Mark frame as empty
-            fdesc.pageId = new PageId(INVALID_PAGE);
-            fdesc.dirty = false;
-            fdesc.pinCount = 0;
-
-            // The frame is now unused; put it on FIFO queue if it's not there already
-            if (!fifoQueue.contains(frameIndex)) {
-                fifoQueue.addLast(frameIndex);
+            try {
+                // Unpin the page before freeing it
+                unpinPage(globalPageId, false);  // 'false' as it doesn't need to be marked dirty
+            } catch (PageUnpinnedException e) {
+                // If the unpinning fails, we can't proceed with freeing the page
+                throw new PagePinnedException(e, "Error unpinning page before freeing.");
             }
-        // Also remove it from disk
+        }
+
         try {
             db.deallocate_page(globalPageId);
         } catch (Exception e) {
             e.printStackTrace();
+            return;
+        }
+            // Remove from hash table
+        hashRemove(globalPageId);
+
+            // Mark frame as empty
+        fdesc.pageId = new PageId(INVALID_PAGE);
+        fdesc.dirty = false;
+        fdesc.pinCount = 0;
+        fdesc.reference = false;
+
+            // The frame is now unused; put it on FIFO queue if it's not there already
+        if (!fifoQueue.contains(frameIndex)) {
+            fifoQueue.addLast(frameIndex);
         }
     }
 
@@ -336,6 +348,7 @@ public class BufMgr implements GlobalConst {
         PageId pageId;
         int pinCount;
         boolean dirty;
+        boolean reference;
     }
 
     /** Simple structure for hash bucket entries: (PageId -> frameIndex). */
@@ -394,7 +407,7 @@ public class BufMgr implements GlobalConst {
     // ----------------------------------------------------------------
     //   EXCEPTIONS
     // ----------------------------------------------------------------
-
+/* 
     public static class BufferPoolExceededException extends ChainException {
         public BufferPoolExceededException(Exception e, String message) {
             super(e, message);
@@ -418,4 +431,5 @@ public class BufMgr implements GlobalConst {
             super(e, message);
         }
     }
+    */
 }
