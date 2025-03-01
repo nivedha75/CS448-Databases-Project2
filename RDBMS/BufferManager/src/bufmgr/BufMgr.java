@@ -7,8 +7,6 @@ import global.GlobalConst;
 import global.Page;
 import global.PageId;
 import global.SystemDefs;
-import chainexception.ChainException;
-
 import java.io.IOException;
 import java.util.LinkedList;
 
@@ -52,36 +50,26 @@ public class BufMgr implements GlobalConst {
     public BufMgr(int numbufs, String replacerArg) {
         this.numBufs = numbufs;
         SystemDefs.JavabaseBM = this;
-        this.db = new DB();  // If your code uses a shared DB or an openDB(...), adapt accordingly.
+        this.db = new DB();
+        for (int i = 0; i < HTSIZE; i++) {
+            directory[i] = new LinkedList<>();
+        } 
         try {
-          db.openDB("MyTempDB", 2000);  // Make sure to open it
+          db.openDB("MyTempDB", 2000);
         } catch (Exception e) {
           e.printStackTrace();
         }
-
-        // Allocate actual Page array & frame descriptors
         this.bufPool = new Page[numbufs];
         this.frameTable = new FrameDesc[numbufs];
-
-        // Initialize each frame
         for (int i = 0; i < numbufs; i++) {
-            bufPool[i] = new Page();  // each is a blank page object
+            bufPool[i] = new Page(); 
             frameTable[i] = new FrameDesc();
             frameTable[i].pageId = new PageId(INVALID_PAGE);
             frameTable[i].pinCount = 0;
             frameTable[i].dirty = false;
-            frameTable[i].reference = false;
-
-            // Initially all frames are unpinned => they're free for replacement
             fifoQueue.addLast(i);
         }
 
-        // Build the hash directory
-        for (int i = 0; i < HTSIZE; i++) {
-            directory[i] = new LinkedList<>();
-        }
-
-        // replacerArg could be stored or validated if needed
     }
 
     // ----------------------------------------------------------------
@@ -99,59 +87,40 @@ public class BufMgr implements GlobalConst {
     public void pinPage(PageId pin_pgid, Page page, boolean emptyPage)
             throws BufferPoolExceededException, HashEntryNotFoundException, InvalidPageNumberException, FileIOException, IOException
     {
-        // 1. Check if the page is already in the buffer
         int frameIndex = hashLookup(pin_pgid);
         if (frameIndex != -1) {
-            // Already in memory
             FrameDesc fdesc = frameTable[frameIndex];
             if (fdesc.pinCount == 0) {
-                // remove from FIFO queue
                 fifoQueue.remove(Integer.valueOf(frameIndex));
             }
             fdesc.pinCount++;
-            // Copy data to caller's Page. We'll assume setpage(byte[]) is the correct method:
             page.setpage(bufPool[frameIndex].getpage());
         }
         else {
-            // Need to bring the page in from disk
             if (fifoQueue.isEmpty()) {
-                // No free frame
                 throw new BufferPoolExceededException(null,
                         "No unpinned frames available for FIFO replacement.");
             }
-            // Choose the oldest unpinned frame
             int victim = fifoQueue.removeFirst();
             FrameDesc vdesc = frameTable[victim];
 
-            // If the victim was dirty, flush it to disk
             if (vdesc.dirty && vdesc.pageId.pid != INVALID_PAGE) {
                 flushPage(vdesc.pageId);
             }
-            // Remove old page from hash table if it was valid
             if (vdesc.pageId.pid != INVALID_PAGE) {
                 hashRemove(vdesc.pageId);
             }
 
-            // If emptyPage == false, do a normal read
-            // (Part 1 typically states "assume false", so let's read from disk.)
             try {
                 db.read_page(pin_pgid, bufPool[victim]);
             } catch (Exception e) {
-                // If there's an error reading from disk, we should put victim frame back
-                // in FIFO queue to avoid losing a frame. Then re-throw or handle.
-                fifoQueue.addFirst(victim); // revert
+                fifoQueue.addFirst(victim); 
                 throw new BufferPoolExceededException(e, "Error reading page from disk");
             }
-
-            // Update victim's frame descriptor
             vdesc.pageId = new PageId(pin_pgid.pid);
             vdesc.pinCount = 1;
             vdesc.dirty = false;
-
-            // Insert new mapping
             hashInsert(pin_pgid, victim);
-
-            // Pass the page data back to the caller
             page.setpage(bufPool[victim].getpage());
         }
     }
@@ -182,8 +151,6 @@ public class BufMgr implements GlobalConst {
             fdesc.dirty = true;
         }
         if (fdesc.pinCount == 0) {
-            fdesc.reference = true;
-            // Now it is a candidate for replacement
             if (!fifoQueue.contains(frameIndex)) {
                 fifoQueue.addLast(frameIndex);
             }
@@ -203,23 +170,15 @@ public class BufMgr implements GlobalConst {
      * @return the first page id (or null if error)
      */
     public PageId newPage(Page firstpage, int howmany) {
-        // DB.allocate_page requires a PageId out-parameter
         PageId startPid = new PageId();
         try {
             db.allocate_page(startPid, howmany);
         } catch (Exception e) {
-            // allocation on disk failed
             return null;
         }
-
-        // Now we have a valid startPid. Try to pin that page in memory.
         try {
-            // Typically, newly allocated pages are empty => emptyPage=true
-            // but the Part 1 instructions often say "assume false." 
-            // We'll go with 'true' for newly allocated pages:
             pinPage(startPid, firstpage, true);
         } catch (Exception e) {
-            // If we fail to pin (no free frames), deallocate the pages on disk
             try {
                 db.deallocate_page(startPid, howmany);
             } catch (Exception ignored) { }
@@ -236,18 +195,19 @@ public class BufMgr implements GlobalConst {
           * @throws HashEntryNotFoundException 
                * @throws PageUnpinnedException 
                     */
-                  public void freePage(PageId globalPageId) throws PagePinnedException, HashEntryNotFoundException, PageUnpinnedException {
+    public void freePage(PageId globalPageId) throws PagePinnedException, HashEntryNotFoundException, PageUnpinnedException {
         int frameIndex = hashLookup(globalPageId);
         if (frameIndex == -1) {
           return;
         }
         FrameDesc fdesc = frameTable[frameIndex];
+        if (fdesc.pinCount > 1) {  
+            throw new PagePinnedException(null, "Cannot free a doubly-pinned page.");
+        }
         if (fdesc.pinCount > 0) {
             try {
-                // Unpin the page before freeing it
-                unpinPage(globalPageId, false);  // 'false' as it doesn't need to be marked dirty
+                unpinPage(globalPageId, false);
             } catch (PageUnpinnedException e) {
-                // If the unpinning fails, we can't proceed with freeing the page
                 throw new PagePinnedException(e, "Error unpinning page before freeing.");
             }
         }
@@ -258,16 +218,10 @@ public class BufMgr implements GlobalConst {
             e.printStackTrace();
             return;
         }
-            // Remove from hash table
         hashRemove(globalPageId);
-
-            // Mark frame as empty
         fdesc.pageId = new PageId(INVALID_PAGE);
         fdesc.dirty = false;
         fdesc.pinCount = 0;
-        fdesc.reference = false;
-
-            // The frame is now unused; put it on FIFO queue if it's not there already
         if (!fifoQueue.contains(frameIndex)) {
             fifoQueue.addLast(frameIndex);
         }
@@ -289,7 +243,6 @@ public class BufMgr implements GlobalConst {
         if (pageid == null) return;
         int frameIndex = hashLookup(pageid);
         if (frameIndex == -1) {
-            // Not in buffer => nothing to flush
             return;
         }
         FrameDesc fdesc = frameTable[frameIndex];
@@ -297,7 +250,6 @@ public class BufMgr implements GlobalConst {
           return;
         }
         if (fdesc.dirty) {
-            // Write it to disk
             db.write_page(fdesc.pageId, bufPool[frameIndex]);
             fdesc.dirty = false;
         }
@@ -348,7 +300,6 @@ public class BufMgr implements GlobalConst {
         PageId pageId;
         int pinCount;
         boolean dirty;
-        boolean reference;
     }
 
     /** Simple structure for hash bucket entries: (PageId -> frameIndex). */
@@ -357,7 +308,6 @@ public class BufMgr implements GlobalConst {
         int frameIndex;
 
         HashEntry(PageId pid, int idx) {
-            // Copy the integer from pid
             this.pid = new PageId(pid.pid);
             this.frameIndex = idx;
         }
@@ -381,6 +331,9 @@ public class BufMgr implements GlobalConst {
     /** Lookup the frame index for a given pageId. Return -1 if not found. */
     private int hashLookup(PageId pid) {
         int bucket = hash(pid);
+        if (directory[bucket] == null) {
+            throw new RuntimeException("Error: directory[" + bucket + "] is null!");
+        }
         for (HashEntry entry : directory[bucket]) {
             if (entry.pid.pid == pid.pid) {
                 return entry.frameIndex;
@@ -404,32 +357,4 @@ public class BufMgr implements GlobalConst {
         }
     }
 
-    // ----------------------------------------------------------------
-    //   EXCEPTIONS
-    // ----------------------------------------------------------------
-/* 
-    public static class BufferPoolExceededException extends ChainException {
-        public BufferPoolExceededException(Exception e, String message) {
-            super(e, message);
-        }
-    }
-
-    public static class PagePinnedException extends ChainException {
-        public PagePinnedException(Exception e, String message) {
-            super(e, message);
-        }
-    }
-
-    public static class PageUnpinnedException extends ChainException {
-        public PageUnpinnedException(Exception e, String message) {
-            super(e, message);
-        }
-    }
-
-    public static class HashEntryNotFoundException extends ChainException {
-        public HashEntryNotFoundException(Exception e, String message) {
-            super(e, message);
-        }
-    }
-    */
 }
