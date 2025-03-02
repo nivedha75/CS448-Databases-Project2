@@ -34,40 +34,40 @@ public class HeapFile implements GlobalConst {
       this.numRec = 0;
       this.pages = new ArrayList<>();
       this.pids = new ArrayList<>();
-      Page newP = new Page(); 
+      Page page = new Page(); 
       if (name != null) {
         PageId first = Minibase.DiskManager.get_file_entry(name);
         if (first != null) {
-          loadHF(newP, first);
+          loadHF(page, first);
         } else {
-          first = createHF(newP);
+          first = createHF(page);
         }
       } else {
-        initialize(newP);
+        initialize(page);
       }
   }
 
-  private PageId createHF(Page newPage) {
-    PageId first = Minibase.BufferManager.newPage(newPage, 1);
+  private PageId createHF(Page page) {
+    PageId first = Minibase.BufferManager.newPage(page, 1);
     Minibase.DiskManager.add_file_entry(fName, first);
     Minibase.BufferManager.unpinPage(first, UNPIN_DIRTY);
     pids.add(first.pid);
     pages.add(first);
-    Minibase.BufferManager.pinPage(first, newPage, PIN_DISKIO);
-    curr = new HFPage(newPage);
+    Minibase.BufferManager.pinPage(first, page, PIN_DISKIO);
+    curr = new HFPage(page);
     curr.initDefaults();
     curr.setCurPage(first);
     Minibase.BufferManager.unpinPage(first, UNPIN_DIRTY);
     return first;
   }
 
-  private void loadHF(Page newP, PageId first) {
-    Minibase.BufferManager.pinPage(first, newP, PIN_DISKIO);
+  private void loadHF(Page page, PageId first) {
+    Minibase.BufferManager.pinPage(first, page, PIN_DISKIO);
     pids.add(first.pid);
     pages.add(first);
-    curr = new HFPage(newP);
+    curr = new HFPage(page);
     curr.setCurPage(first);
-    curr.setData(newP.getData());
+    curr.setData(page.getData());
     Minibase.BufferManager.unpinPage(first, UNPIN_CLEAN);
     RID record = curr.firstRecord();
     while (record != null) {
@@ -122,8 +122,8 @@ public class HeapFile implements GlobalConst {
       Minibase.DiskManager.delete_file_entry(fName);
       fStatus = 1;
       numRec = 0;
-      pages.clear();
       pids.clear();
+      pages.clear();
     }
   }
 
@@ -135,27 +135,27 @@ public class HeapFile implements GlobalConst {
   public RID insertRecord(byte[] record) throws Exception {
     //PUT YOUR CODE HERE
     if (HFPage.HEADER_SIZE + record.length > 1024) {
-      throw new SpaceNotAvailableException("The record is too large!");
+      throw new SpaceNotAvailableException("Too big of a record!");
     }
-    PageId target = pages.get(pages.size() - 1);
     Page cp = new Page();
+    PageId target = pages.get(pages.size() - 1);
     Minibase.BufferManager.pinPage(target, cp, PIN_DISKIO);
     HFPage ch = new HFPage(cp);
     ch.setCurPage(target);
-    if (record.length < ch.getFreeSpace()) {
-      numRec++;
-      RID rec = ch.insertRecord(record);
-      Minibase.BufferManager.unpinPage(target, UNPIN_DIRTY);
-      return rec;
+    if (record.length >= ch.getFreeSpace()) {
+      Minibase.BufferManager.unpinPage(target, UNPIN_CLEAN);
+      return createInsertPage(record);
     }
-    Minibase.BufferManager.unpinPage(target, UNPIN_CLEAN);
-    return createInsertPage(record);
+    numRec++;
+    RID rec = ch.insertRecord(record);
+    Minibase.BufferManager.unpinPage(target, UNPIN_DIRTY);
+    return rec;
   }
 
   private RID createInsertPage(byte[] record) throws Exception {
-    Page newP = new Page();
-    PageId newPid = Minibase.BufferManager.newPage(newP, 1);
-    HFPage newHFP = new HFPage(newP);
+    Page page = new Page();
+    PageId newPid = Minibase.BufferManager.newPage(page, 1);
+    HFPage newHFP = new HFPage(page);
     curr.setNextPage(newPid);
     newHFP.initDefaults();
     newHFP.setCurPage(newPid);
@@ -170,23 +170,26 @@ public class HeapFile implements GlobalConst {
     return rec;
   }
 
-/**
+  /**
    * Reads a record from the file, given its id.
    * 
    * @throws IllegalArgumentException if the rid is invalid
    */
-  public Tuple getRecord(RID rid) throws Exception{
-    //PUT YOUR CODE
-    if (!pids.contains(rid.pageno.pid)) {
-      throw new IllegalArgumentException("The RID is invalid");
-    }
+  public byte[] selectRecord(RID rid) {
+  //   //PUT YOUR CODE HERE
+  if (!pids.contains(rid.pageno.pid)) {
+    throw new IllegalArgumentException("The Record ID is invalid");
+  }
+  HFPage page = new HFPage();
+  Minibase.BufferManager.pinPage(rid.pageno, page, PIN_DISKIO);
+  byte[] record = page.selectRecord(rid);
+  Minibase.BufferManager.unpinPage(rid.pageno, UNPIN_CLEAN);
+  return record;
+  }
 
-    HFPage page = new HFPage();
-    Minibase.BufferManager.pinPage(rid.pageno, page, PIN_DISKIO);
-    byte[] record = page.selectRecord(rid);
-    Minibase.BufferManager.unpinPage(rid.pageno, UNPIN_CLEAN);
-
-    return new Tuple(record, 0, record.length);
+  public Tuple getRecord(RID record) throws Exception {
+    byte[] records = selectRecord(record);
+    return new Tuple(records, 0, records.length);
   }
 
   /**
@@ -194,11 +197,10 @@ public class HeapFile implements GlobalConst {
    * 
    * @throws IllegalArgumentException if the rid or new record is invalid
    */
-
-  public boolean updateRecord(RID rid, Tuple newRecord) throws Exception{
+  public boolean updateRecord(RID rid, Tuple newRecord) throws Exception {
+    //PUT YOUR CODE HERE
     HFPage page = new HFPage();
     Minibase.BufferManager.pinPage(rid.pageno, page, false);
-
     try {
       page.updateRecord(rid, newRecord);
       Minibase.BufferManager.unpinPage(rid.pageno, UNPIN_DIRTY);
@@ -206,56 +208,27 @@ public class HeapFile implements GlobalConst {
     } catch (IllegalArgumentException e) {
       Minibase.BufferManager.unpinPage(rid.pageno, UNPIN_CLEAN);
       throw new InvalidUpdateException();
-    } 
-
-  } 
-
+    }
+  }
 
   /**
    * Deletes the specified record from the heap file.
    * 
    * @throws IllegalArgumentException if the rid is invalid
    */
-  public boolean deleteRecord(RID rid) throws Exception{
+  public boolean deleteRecord(RID rid) {
+    //PUT YOUR CODE HERE
     HFPage page = new HFPage();
     Minibase.BufferManager.pinPage(rid.pageno, page, false);
-
     try {
       page.deleteRecord(rid);
       Minibase.BufferManager.unpinPage(rid.pageno, UNPIN_DIRTY);
       return true;
     } catch (IllegalArgumentException e) {
       Minibase.BufferManager.unpinPage(rid.pageno, UNPIN_CLEAN);
-      throw new IllegalArgumentException("The RID is invalid");
+      throw new IllegalArgumentException("The Record ID is invalid");
     }
   }
-
-  /**
-   * Reads a record from the file, given its id.
-   * 
-   * @throws IllegalArgumentException if the rid is invalid
-   */
-  // public byte[] selectRecord(RID rid) {
-  //   //PUT YOUR CODE HERE
-  // }
-
-  // /**
-  //  * Updates the specified record in the heap file.
-  //  * 
-  //  * @throws IllegalArgumentException if the rid or new record is invalid
-  //  */
-  // public void updateRecord(RID rid, byte[] newRecord) {
-  //   //PUT YOUR CODE HERE
-  // }
-
-  // /**
-  //  * Deletes the specified record from the heap file.
-  //  * 
-  //  * @throws IllegalArgumentException if the rid is invalid
-  //  */
-  // public void deleteRecord(RID rid) {
-  //   //PUT YOUR CODE HERE
-  // }
 
   /**
    * Gets the number of records in the file.
