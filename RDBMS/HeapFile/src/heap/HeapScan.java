@@ -153,7 +153,7 @@ public class HeapScan implements GlobalConst {
   protected HeapScan(HeapFile hf) {
 
     //initialize iterator
-    pageIdIt = hf.pageIdList.iterator();
+    pageIdIt = hf.pages.iterator();
 
     //initialize currHF to be the header page (first page in heapfile)
     Page newPage = new Page();
