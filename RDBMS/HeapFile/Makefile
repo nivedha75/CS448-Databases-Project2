@@ -16,3 +16,7 @@ compile:src/*/*.java
 xx : compile
 	$(JAVA) -cp $(CLASSPATH):bin tests.HFTest
 
+clean:
+	rm -rf bin/*.class
+
+

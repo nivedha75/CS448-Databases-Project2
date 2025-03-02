@@ -1,8 +1,11 @@
 package heap;
 
-import java.util.*;
-import global.* ;
-import chainexception.ChainException;
+import java.io.IOException;
+//import java.util.*;
+import global.*;
+import bufmgr.*;
+import diskmgr.*;
+//import chainexception.ChainException;
 
 /**
  * A HeapScan object is created only through the function openScan() in the
@@ -11,13 +14,34 @@ import chainexception.ChainException;
  */
 public class HeapScan implements GlobalConst {
 
+  private HeapFile heapFile;
+  private PageId currentDirPageId;
+  private PageId currentDataPageId;
+  private HFPage currentDirPage;
+  private HFPage currentDataPage;
+  private RID currentRID;
+  private boolean scanOpen;
+
   /**
    * Constructs a file scan by pinning the directoy header page and initializing
    * iterator fields.
    */
   protected HeapScan(HeapFile hf) {
     //PUT YOUR CODE HERE
-    
+    this.heapFile = hf;
+    this.scanOpen = true;
+    try {
+      if (hf.firstPageId.pid != INVALID_PAGE) {
+          Page dirPage = new Page();
+          SystemDefs.JavabaseBM.pinPage(hf.firstPageId, dirPage, false);
+          currentDirPage = new HFPage(dirPage);
+          currentDirPageId = hf.firstPageId;
+          currentDataPageId = currentDirPageId;
+          loadNextDataPage();
+      }
+    } catch (Exception e) {
+      throw new RuntimeException("HeapScan initialization failed.", e);
+    }
   }
 
   /**
@@ -26,6 +50,7 @@ public class HeapScan implements GlobalConst {
    */
   protected void finalize() throws Throwable {
     //PUT YOUR CODE HERE
+    close();
   }
 
   /**
@@ -33,6 +58,19 @@ public class HeapScan implements GlobalConst {
    */
   public void close() {
     //PUT YOUR CODE HERE
+    if (!scanOpen) return;
+        scanOpen = false;
+        
+        try {
+            if (currentDataPageId != null && currentDataPageId.pid != INVALID_PAGE) {
+                SystemDefs.JavabaseBM.unpinPage(currentDataPageId, false);
+            }
+            if (currentDirPageId != null && currentDirPageId.pid != INVALID_PAGE) {
+                SystemDefs.JavabaseBM.unpinPage(currentDirPageId, false);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Error closing HeapScan", e);
+        }
   }
 
   /**
@@ -40,6 +78,7 @@ public class HeapScan implements GlobalConst {
    */
   public boolean hasNext() {
     //PUT YOUR CODE HERE
+    return scanOpen && currentDataPage != null && currentRID != null;
   }
 
   /**
@@ -50,6 +89,43 @@ public class HeapScan implements GlobalConst {
    */
   public byte[] getNext(RID rid) {
     //PUT YOUR CODE HERE
+    if (!hasNext()) {
+      throw new IllegalStateException("No more records to scan.");
+  }
+  try {
+      byte[] tuple = currentDataPage.selectRecord(currentRID);
+      rid.copyRid(currentRID); 
+      currentRID = currentDataPage.nextRecord(currentRID);
+      if (currentRID == null) {
+          SystemDefs.JavabaseBM.unpinPage(currentDataPageId, false);
+          loadNextDataPage();
+      }
+
+      return tuple;
+  } catch (Exception e) {
+      throw new RuntimeException("Error reading next record", e);
+  }
   }
 
+  /**
+     * Moves to the next data page in the heap file.
+        * @throws FileIOException 
+        * @throws BufferPoolExceededException 
+           * @throws PageUnpinnedException 
+                  */
+  private void loadNextDataPage() throws IOException, InvalidPageNumberException, HashEntryNotFoundException, ReplacerException, BufferPoolExceededException, FileIOException, PageUnpinnedException {
+        while (currentDataPageId != null && currentDataPageId.pid != INVALID_PAGE) {
+            Page nextPage = new Page();
+            SystemDefs.JavabaseBM.pinPage(currentDataPageId, nextPage, false);
+            currentDataPage = new HFPage(nextPage);
+            currentRID = currentDataPage.firstRecord();
+            if (currentRID != null) {
+                return;
+            }
+            currentDataPageId = currentDataPage.getNextPage();
+            SystemDefs.JavabaseBM.unpinPage(currentDataPageId, false);
+        }
+        currentDataPage = null;
+        currentRID = null;
+    }
 } // public class HeapScan implements GlobalConst
