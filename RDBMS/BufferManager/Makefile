@@ -6,8 +6,8 @@ BINPATH = $(JDKPATH)/bin
 JAVAC = $(JDKPATH)/bin/javac 
 JAVA  = $(JDKPATH)/bin/java 
 
-# PROGS = xx
-PROGS = run
+PROGS = xx
+#PROGS = run
 
 all: $(PROGS)
 
