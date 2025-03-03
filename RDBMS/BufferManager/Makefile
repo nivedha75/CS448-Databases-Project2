@@ -14,11 +14,11 @@ all: $(PROGS)
 compile:src/*/*.java
 	$(JAVAC) -cp $(CLASSPATH) -d bin src/*/*.java
 
-# xx : compile
-# 	$(JAVA) -cp $(CLASSPATH):bin tests.BMTest
-
-run : compile
+xx : compile
 	$(JAVA) -cp $(CLASSPATH):bin tests.BMTest
+
+# run : compile
+# 	$(JAVA) -cp $(CLASSPATH):bin tests.BMTest
 
 clean:
 	rm -rf bin/*.class
